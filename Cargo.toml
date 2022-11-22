@@ -1,0 +1,9 @@
+[package]
+name = "ren"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+env_logger = "0.9.3"
+sqlx = { version = "0.6", features = [ "runtime-tokio-native-tls" , "postgres" ] }
+tokio = { version = "1", features = ["full"] }
