@@ -23,10 +23,11 @@ async fn main() -> Result<(), sqlx::Error> {
 }
 
 async fn add_issuance(pool: &Pool<Postgres>, name: &str, n: i16) -> Result<(), sqlx::Error> {
-    // let tx = pool.begin();
+    let mut tx = pool.begin().await?;
+    drop(pool); // Make sure we don't accidentally use the pool instead of the tx.
     let issuance = sqlx::query_as::<_, Issuance>("SELECT * FROM issuance WHERE name = $1")
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(&mut tx)
         .await?;
 
     match issuance {
@@ -37,8 +38,9 @@ async fn add_issuance(pool: &Pool<Postgres>, name: &str, n: i16) -> Result<(), s
             sqlx::query("UPDATE issuance SET issuances = $1 WHERE name = $2")
                 .bind(issuance.issuances)
                 .bind(name)
-                .execute(pool)
+                .execute(&mut tx)
                 .await?;
+            tx.commit().await?;
 
             Ok(())
         }
@@ -46,8 +48,9 @@ async fn add_issuance(pool: &Pool<Postgres>, name: &str, n: i16) -> Result<(), s
             sqlx::query("INSERT INTO issuance (name, issuances) VALUES ($1, $2)")
                 .bind(name)
                 .bind(&n.to_be_bytes())
-                .execute(pool)
+                .execute(&mut tx)
                 .await?;
+            tx.commit().await?;
             Ok(())
         }
     }
