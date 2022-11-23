@@ -12,7 +12,7 @@ struct Issuance {
     issuances: Vec<u8>,
 }
 
-const CONNS: usize = 50;
+const CONNS: usize = 100;
 
 #[tokio::main]
 async fn main() -> Result<(), sqlx::Error> {
@@ -68,47 +68,12 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
 }
 
 async fn add_issuance(pool: Arc<Pool<Postgres>>, name: String, n: i16) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    drop(pool); // Make sure we don't accidentally use the pool instead of the tx.
-    let issuance = sqlx::query_as::<_, Issuance>("SELECT * FROM issuance WHERE name = $1")
-        .bind(&name)
-        .fetch_optional(&mut tx)
-        .await?;
-
-    match issuance {
-        Some(mut issuance) => {
-            // This entry already exists; no need to write.
-            if issuance
-                .issuances
-                .as_chunks()
-                .0
-                .iter()
-                .map(|x| i16::from_be_bytes(*x))
-                .any(|x| x == n)
-            {
-                return Ok(());
-            }
-
-            issuance
-                .issuances
-                .extend_from_slice(n.to_be_bytes().as_ref());
-            sqlx::query("UPDATE issuance SET issuances = $1 WHERE name = $2")
-                .bind(issuance.issuances)
-                .bind(&name)
-                .execute(&mut tx)
-                .await?;
-            tx.commit().await?;
-
-            Ok(())
-        }
-        None => {
-            sqlx::query("INSERT INTO issuance (name, issuances) VALUES ($1, $2)")
-                .bind(&name)
-                .bind(&n.to_be_bytes())
-                .execute(&mut tx)
-                .await?;
-            tx.commit().await?;
-            Ok(())
-        }
-    }
+    sqlx::query(r##"
+            INSERT INTO issuance as iss (name, issuances) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET issuances = iss.issuances || EXCLUDED.issuances;
+    "##)
+    .bind(&name)
+    .bind(n.to_be_bytes().as_ref())
+    .execute(pool.as_ref())
+    .await?;
+    Ok(())
 }
