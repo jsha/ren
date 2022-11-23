@@ -3,6 +3,18 @@ name = "ren"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "fill"
+path = "src/fill.rs"
+
+[[bin]]
+name = "look"
+path = "src/look.rs"
+
+[profile.release]
+debug = 1
+lto = true
+
 [dependencies]
 chrono = "0.4.23"
 csv = "1.1.6"
