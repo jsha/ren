@@ -1,3 +1,4 @@
+#![feature(slice_as_chunks)]
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -34,6 +35,7 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
     let mut csv_decoder = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_reader(decoder);
+    let begin = std::time::Instant::now();
     let join_handles = futures::stream::iter(
         csv_decoder
             .records()
@@ -48,13 +50,15 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
                 let diff = parsed - basedate;
                 let num_days: i16 = diff.num_days().try_into().expect("date too far from 2015");
                 if i % 1000 == 0 {
-                    println!("{} {} {}", i, name, num_days);
+                    let elapsed = begin.elapsed().as_secs_f64();
+                    let rows_per_sec = i as f64 / elapsed;
+                    println!("{} {} {} {}", i, rows_per_sec, name, num_days);
                 }
                 (name.to_string(), num_days)
             })
             .map(|(name, num_days)| tokio::spawn(add_issuance(pool.clone(), name, num_days))),
     )
-    .buffer_unordered(50)
+    .buffer_unordered(300)
     .collect::<Vec<_>>();
     join_handles.await;
     Ok(())
@@ -70,6 +74,18 @@ async fn add_issuance(pool: Arc<Pool<Postgres>>, name: String, n: i16) -> Result
 
     match issuance {
         Some(mut issuance) => {
+            // This entry already exists; no need to write.
+            if issuance
+                .issuances
+                .as_chunks()
+                .0
+                .iter()
+                .map(|x| i16::from_be_bytes(*x))
+                .any(|x| x == n)
+            {
+                return Ok(());
+            }
+
             issuance
                 .issuances
                 .extend_from_slice(n.to_be_bytes().as_ref());
