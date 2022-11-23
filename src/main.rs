@@ -12,11 +12,14 @@ struct Issuance {
     issuances: Vec<u8>,
 }
 
+const CONNS: usize = 50;
+
 #[tokio::main]
 async fn main() -> Result<(), sqlx::Error> {
     env_logger::init();
     let pool = PgPoolOptions::new()
-        .max_connections(50)
+        .max_connections(CONNS as u32)
+        .min_connections(100)
         .connect(&std::env::var("DSN").expect("didn't find $DSN environment variable"))
         .await?;
     let pool = Arc::new(pool);
@@ -58,7 +61,7 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
             })
             .map(|(name, num_days)| tokio::spawn(add_issuance(pool.clone(), name, num_days))),
     )
-    .buffer_unordered(300)
+    .buffer_unordered(CONNS + 10)
     .collect::<Vec<_>>();
     join_handles.await;
     Ok(())
