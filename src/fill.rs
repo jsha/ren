@@ -5,13 +5,6 @@ use chrono::prelude::*;
 use futures::StreamExt;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
-#[derive(sqlx::FromRow, Debug)]
-struct Issuance {
-    #[allow(dead_code)]
-    name: String,
-    issuances: Vec<u8>,
-}
-
 const CONNS: usize = 100;
 
 #[tokio::main]
@@ -19,7 +12,6 @@ async fn main() -> Result<(), sqlx::Error> {
     env_logger::init();
     let pool = PgPoolOptions::new()
         .max_connections(CONNS as u32)
-        .min_connections(100)
         .connect(&std::env::var("DSN").expect("didn't find $DSN environment variable"))
         .await?;
     let pool = Arc::new(pool);
@@ -43,8 +35,9 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
         csv_decoder
             .records()
             .enumerate()
+            .take(1000)
             .map(|(i, result)| {
-                let record = result.expect("failed to parse CSV line");
+                let record = result.expect(&format!("failed to parse CSV line in {}", filename));
                 let name = record.get(1).expect("getting column 1");
                 let date = record.get(2).expect("getting column 2");
                 let parsed = Utc
@@ -59,21 +52,30 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
                 }
                 (name.to_string(), num_days)
             })
-            .map(|(name, num_days)| tokio::spawn(add_issuance(pool.clone(), name, num_days))),
+            .map(|(name, num_days)| add_issuance(pool.clone(), name, num_days)),
     )
     .buffer_unordered(CONNS + 10)
     .collect::<Vec<_>>();
-    join_handles.await;
-    Ok(())
+
+    join_handles
+        .await
+        .into_iter()
+        .collect::<Result<_, sqlx::Error>>()
 }
 
 async fn add_issuance(pool: Arc<Pool<Postgres>>, name: String, n: i16) -> Result<(), sqlx::Error> {
-    sqlx::query(r##"
-            INSERT INTO issuance as iss (name, issuances) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET issuances = iss.issuances || EXCLUDED.issuances;
-    "##)
+    sqlx::query(
+        r##"
+            INSERT INTO issuance as iss
+            (name, issuances) VALUES ($1, $2)
+            ON CONFLICT (name) DO UPDATE
+              SET issuances = iss.issuances || EXCLUDED.issuances
+              WHERE LENGTH(iss.issuances) < 200;
+    "##,
+    )
     .bind(&name)
     .bind(n.to_be_bytes().as_ref())
     .execute(pool.as_ref())
-    .await?;
-    Ok(())
+    .await
+    .map(|_| ())
 }
