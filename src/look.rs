@@ -10,6 +10,13 @@ struct Issuance {
     issuances: Vec<u8>,
 }
 
+#[derive(Copy, Clone, Debug)]
+enum RenewalType {
+    Timely = 0,
+    Rescued = 1,
+    Expired = 2,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), sqlx::Error> {
     env_logger::init();
@@ -31,27 +38,28 @@ async fn main() -> Result<(), sqlx::Error> {
             let deduped = issuances.partition_dedup().0.to_vec();
             let firsts = deduped.iter();
             let seconds = deduped.iter().skip(1);
-            let diffs: Vec<i16> = std::iter::zip(firsts, seconds)
-                .map(|(a, b)| b - a)
+            use RenewalType::*;
+            let diffs: Vec<RenewalType> = std::iter::zip(firsts, seconds)
+                .map(|(a, b)| match b - a {
+                    i16::MIN..=70 => Timely,
+                    71..=71 => Rescued,
+                    71.. => Expired,
+                })
                 .collect();
-            futures::stream::iter(diffs)
+            let counts = diffs.iter().fold([0u16; 3], |mut counts, rt| {
+                counts[*rt as usize] += 1;
+                counts
+            });
+            let kind = if counts[0] > 2 && counts[2] == 0 && counts[1] > 0 {
+                eprintln!("{}: {} timely, {} rescued", f.name, counts[0], counts[1]);
+                Some((counts[0], counts[1]))
+            } else {
+                None
+            };
+            futures::stream::iter(kind)
         })
         .flatten()
-        .enumerate()
-        .fold([0u64; 200], |mut counts, (i, diff)| async move {
-            if diff < 200 {
-                counts[diff as usize] += 1;
-            } else {
-                counts[199] += 1;
-            }
-            if i % 100000 == 0 {
-                eprintln!("counts: {}", i);
-                for (n, c) in counts.iter().enumerate() {
-                    eprintln!("{}: {}", n, ".".repeat(*c as usize / 1_000))
-                }
-            }
-            counts
-        })
+        .collect::<Vec<_>>()
         .await;
     eprintln!("results: {:?}", results);
     Ok(())
