@@ -5,7 +5,7 @@ use chrono::prelude::*;
 use futures::StreamExt;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
-const CONNS: usize = 100;
+const CONNS: usize = 25;
 
 #[tokio::main]
 async fn main() -> Result<(), sqlx::Error> {
@@ -35,7 +35,6 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
         csv_decoder
             .records()
             .enumerate()
-            .take(1000)
             .map(|(i, result)| {
                 let record = result.expect(&format!("failed to parse CSV line in {}", filename));
                 let name = record.get(1).expect("getting column 1");
@@ -54,7 +53,7 @@ async fn process_file(filename: &str, pool: Arc<Pool<Postgres>>) -> Result<(), s
             })
             .map(|(name, num_days)| add_issuance(pool.clone(), name, num_days)),
     )
-    .buffer_unordered(CONNS + 10)
+    .buffer_unordered(CONNS)
     .collect::<Vec<_>>();
 
     join_handles
